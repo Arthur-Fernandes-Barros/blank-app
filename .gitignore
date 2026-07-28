@@ -164,4 +164,3 @@ cython_debug/
 #.idea/
 
 .streamlit
-.venv-1
