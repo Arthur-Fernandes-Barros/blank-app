@@ -1,3 +1,4 @@
 streamlit
 firebase_admin
 firebase-admin
+google-cloud-firestore
