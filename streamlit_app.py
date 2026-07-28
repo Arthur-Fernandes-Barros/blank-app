@@ -1,6 +1,6 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore
+from google.cloud import firestore
+from google.oauth2 import service_account
 from datetime import datetime
 
 # --- 1. Configuração da Página ---
@@ -10,30 +10,33 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- Função de Inicialização do Firebase ---
+# --- Conexão Direta e Estável com o Firestore ---
 
 
 @st.cache_resource
-def init_firebase():
-    if not firebase_admin._apps:
-        if "firebase" not in st.secrets:
-            st.error(
-                "⚠️ Configurações do Firebase não encontradas no `st.secrets`!")
-            st.stop()
+def init_firestore():
+    if "firebase" not in st.secrets:
+        st.error("⚠️ Configurações do Firestore não encontradas no `st.secrets`!")
+        st.stop()
 
-        cred_dict = dict(st.secrets["firebase"])
-        # Corrige as quebras de linha da chave privada vindo do TOML
-        if "private_key" in cred_dict:
-            cred_dict["private_key"] = cred_dict["private_key"].replace(
-                "\\n", "\n")
+    key_dict = dict(st.secrets["firebase"])
 
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
+    # Corrige a chave privada caso venha sanitizada do arquivo TOML
+    if "private_key" in key_dict and isinstance(key_dict["private_key"], str):
+        key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+
+    # Autenticação nativa com Service Account
+    credentials = service_account.Credentials.from_service_account_info(
+        key_dict)
+    return firestore.Client(credentials=credentials, project=key_dict.get("project_id"))
 
 
-# Inicializa o banco de dados
-db = init_firebase()
+# Inicializa o cliente do banco de dados
+try:
+    db = init_firestore()
+except Exception as e:
+    st.error(f"Erro ao conectar com o Firestore: {e}")
+    st.stop()
 
 st.title("📜 Contrato Didático e Combinados da Turma")
 st.caption("Monte o acordo coletivo, defina os responsáveis pelas regras e gere o contrato para impressão!")
@@ -217,23 +220,25 @@ with tab_criar:
 
         with col_save:
             st.subheader("☁️ Salvar na Nuvem")
-            st.caption(
-                "Armazena o contrato no Firebase para outros professores.")
-            if st.button("💾 Salvar no Firebase", use_container_width=True):
-                doc_ref = db.collection(
-                    "contratos").document(nome_turma_completo)
-                doc_ref.set({
-                    "turma": nome_turma_completo,
-                    "professor": nome_prof,
-                    "regras": aprovadas,
-                    "data_atualizacao": firestore.SERVER_TIMESTAMP
-                })
-                st.success(
-                    f"Contrato da turma {nome_turma_completo} salvo com sucesso!")
+            st.caption("Armazena o contrato no Firestore.")
+            if st.button("💾 Salvar no Firestore", use_container_width=True):
+                try:
+                    doc_ref = db.collection(
+                        "contratos").document(nome_turma_completo)
+                    doc_ref.set({
+                        "turma": nome_turma_completo,
+                        "professor": nome_prof,
+                        "regras": aprovadas,
+                        "data_atualizacao": firestore.SERVER_TIMESTAMP
+                    })
+                    st.success(
+                        f"Contrato da turma **{nome_turma_completo}** salvo no Firestore!")
+                except Exception as err:
+                    st.error(f"Erro ao salvar documento: {err}")
 
         with col_export:
             st.subheader("📄 Exportar Contrato")
-            st.caption("Baixe para impressão (Ctrl+P no navegador).")
+            st.caption("Baixe para impressão.")
             html_doc = gerar_html_contrato(
                 nome_turma_completo, nome_prof, aprovadas)
             st.download_button(
@@ -249,35 +254,39 @@ with tab_criar:
 # ==========================================
 with tab_salvos:
     st.header("📂 Base de Contratos Salvos")
-    st.write("Consulte ou baixe contratos criados por outros professores.")
+    st.write("Consulte ou baixe contratos salvos no banco de dados.")
 
     if st.button("🔄 Atualizar Lista"):
         st.rerun()
 
-    contratos_ref = db.collection("contratos").stream()
-    contratos_encontrados = False
+    try:
+        contratos_ref = db.collection("contratos").stream()
+        contratos_encontrados = False
 
-    for doc in contratos_ref:
-        contratos_encontrados = True
-        dados = doc.to_dict()
-        turma = dados.get("turma", "Turma Desconhecida")
-        prof = dados.get("professor", "Não informado")
-        regras_salvas = dados.get("regras", [])
+        for doc in contratos_ref:
+            contratos_encontrados = True
+            dados = doc.to_dict()
+            turma = dados.get("turma", "Turma Desconhecida")
+            prof = dados.get("professor", "Não informado")
+            regras_salvas = dados.get("regras", [])
 
-        with st.expander(f"🏫 {turma} — Prof(a). {prof}"):
-            for i, r in enumerate(regras_salvas, 1):
-                st.markdown(
-                    f"**{i}.** {r.get('texto', '')} *(Responsável: {r.get('responsavel', '')})*")
+            with st.expander(f"🏫 {turma} — Prof(a). {prof}"):
+                for i, r in enumerate(regras_salvas, 1):
+                    st.markdown(
+                        f"**{i}.** {r.get('texto', '')} *(Responsável: {r.get('responsavel', '')})*")
 
-            st.divider()
-            html_salvo = gerar_html_contrato(turma, prof, regras_salvas)
-            st.download_button(
-                label=f"📥 Baixar HTML ({turma})",
-                data=html_salvo,
-                file_name=f"Contrato_{turma.replace(' ', '_')}.html",
-                mime="text/html",
-                key=f"dl_{doc.id}"
-            )
+                st.divider()
+                html_salvo = gerar_html_contrato(turma, prof, regras_salvas)
+                st.download_button(
+                    label=f"📥 Baixar HTML ({turma})",
+                    data=html_salvo,
+                    file_name=f"Contrato_{turma.replace(' ', '_')}.html",
+                    mime="text/html",
+                    key=f"dl_{doc.id}"
+                )
 
-    if not contratos_encontrados:
-        st.info("Nenhum contrato foi salvo no Firebase ainda.")
+        if not contratos_encontrados:
+            st.info("Nenhum contrato foi encontrado no Firestore ainda.")
+
+    except Exception as err:
+        st.error(f"Erro ao buscar contratos: {err}")
