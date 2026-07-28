@@ -3,33 +3,108 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 
-# --- 1. Configuração da Página e Conexão com Firebase ---
-st.set_page_config(page_title="Contrato Didático da Turma",
-                   page_icon="📜", layout="centered")
+# --- 1. Configuração da Página ---
+st.set_page_config(
+    page_title="Contrato Didático da Turma",
+    page_icon="📜",
+    layout="centered"
+)
 
-# Função para inicializar o Firebase apenas uma vez (usando cache do Streamlit)
+# --- Função de Inicialização do Firebase ---
 
 
 @st.cache_resource
 def init_firebase():
     if not firebase_admin._apps:
-        # Puxa os dados do .streamlit/secrets.toml
+        if "firebase" not in st.secrets:
+            st.error(
+                "⚠️ Configurações do Firebase não encontradas no `st.secrets`!")
+            st.stop()
+
         cred_dict = dict(st.secrets["firebase"])
+        # Corrige as quebras de linha da chave privada vindo do TOML
+        if "private_key" in cred_dict:
+            cred_dict["private_key"] = cred_dict["private_key"].replace(
+                "\\n", "\n")
+
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
     return firestore.client()
 
 
+# Inicializa o banco de dados
 db = init_firebase()
 
 st.title("📜 Contrato Didático e Combinados da Turma")
 st.caption("Monte o acordo coletivo, defina os responsáveis pelas regras e gere o contrato para impressão!")
 
-# --- 2. Estrutura de Abas (Tabs) ---
+# --- Helper Function: Gerador de HTML para Impressão ---
+
+
+def gerar_html_contrato(turma, professor, regras):
+    linhas_tabela = ""
+    for idx, item in enumerate(regras, 1):
+        linhas_tabela += f"""<tr>
+            <td style="text-align: center; font-weight: bold; padding: 8px; border: 1px solid #ddd;">{idx}</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">{item['texto']}</td>
+            <td style="padding: 8px; border: 1px solid #ddd; font-weight: 500;">{item['responsavel']}</td>
+        </tr>"""
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; padding: 20px; color: #333; }}
+            .header {{ text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; margin-bottom: 20px; }}
+            .header h1 {{ color: #1e3a8a; margin: 0; font-size: 20pt; }}
+            .info {{ background: #f3f4f6; padding: 10px 15px; border-left: 4px solid #2563eb; margin-bottom: 20px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
+            th {{ background: #1e3a8a; color: white; padding: 8px; text-align: left; }}
+            .pacto {{ background: #eff6ff; padding: 12px; border: 1px solid #bfdbfe; font-style: italic; text-align: center; margin-bottom: 30px; }}
+            .sig-container {{ display: flex; justify-content: space-between; margin-top: 50px; }}
+            .sig-box {{ width: 40%; text-align: center; border-top: 1px solid #333; padding-top: 5px; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>CONTRATO DIDÁTICO DE SALA DE AULA</h1>
+            <p>Compromisso de Convivência e Aprendizado Coletivo</p>
+        </div>
+        <div class="info">
+            <p style="margin: 3px 0;"><strong>Turma:</strong> {turma}</p>
+            <p style="margin: 3px 0;"><strong>Professor(a):</strong> {professor}</p>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 8%; text-align: center;">#</th>
+                    <th style="width: 62%;">Regra / Combinado</th>
+                    <th style="width: 30%;">Responsável</th>
+                </tr>
+            </thead>
+            <tbody>{linhas_tabela}</tbody>
+        </table>
+        <div class="pacto">
+            "Declaramos que participamos ativamente da construção deste contrato didático. Toda a turma se compromete a respeitar os acordos firmados para garantir um ambiente produtivo, seguro e harmonioso para todos."
+        </div>
+        <div class="sig-container">
+            <div class="sig-box">Representante da Turma</div>
+            <div class="sig-box">Prof. {professor}</div>
+        </div>
+    </body>
+    </html>
+    """
+
+
+# --- 2. Estrutura de Abas ---
 tab_criar, tab_salvos = st.tabs(["📝 Criar Contrato", "📂 Contratos Salvos"])
 
+# ==========================================
+# ABA 1: CRIAR CONTRATO
+# ==========================================
 with tab_criar:
-    # --- Regras Padrão Iniciais ---
     REGRAS_PADRAO = [
         {"id": 1, "texto": "Respeitar os colegas e professores",
             "responsavel": "Toda a Turma", "votos": 0, "aprovada": True},
@@ -65,7 +140,7 @@ with tab_criar:
     nome_turma_completo = f"{ano_selecionado} {letra_selecionada}"
     st.divider()
 
-    # --- Adicionar Nova Regra ---
+    # --- Formulário de Nova Regra ---
     st.subheader("➕ Adicionar Nova Regra ou Sugestão")
     with st.form("nova_regra_form", clear_on_submit=True):
         col_input, col_resp = st.columns([2.5, 1.5])
@@ -93,7 +168,7 @@ with tab_criar:
 
     st.divider()
 
-    # --- Termômetro do Acordo ---
+    # --- Termômetro ---
     aprovadas = [r for r in st.session_state.regras if r["aprovada"]]
     total = len(st.session_state.regras)
     progresso = len(aprovadas) / total if total > 0 else 0
@@ -103,7 +178,7 @@ with tab_criar:
     st.progress(progresso)
     st.divider()
 
-    # --- Lista de Regras Interativas ---
+    # --- Lista de Regras ---
     st.subheader(f"📋 Regras e Combinados — {nome_turma_completo}")
     item_para_remover = None
 
@@ -135,17 +210,16 @@ with tab_criar:
             r for r in st.session_state.regras if r["id"] != item_para_remover]
         st.rerun()
 
-    # --- Visualização e Exportação ---
+    # --- Ações de Salvar e Baixar ---
     if aprovadas:
         st.divider()
         col_export, col_save = st.columns(2)
 
-        # Bloco de Salvar no Firebase
         with col_save:
             st.subheader("☁️ Salvar na Nuvem")
-            st.caption("Salva o contrato para consulta por outros professores.")
+            st.caption(
+                "Armazena o contrato no Firebase para outros professores.")
             if st.button("💾 Salvar no Firebase", use_container_width=True):
-                # Usamos o nome da turma como ID do documento para que turmas iguais atualizem o mesmo arquivo
                 doc_ref = db.collection(
                     "contratos").document(nome_turma_completo)
                 doc_ref.set({
@@ -157,83 +231,29 @@ with tab_criar:
                 st.success(
                     f"Contrato da turma {nome_turma_completo} salvo com sucesso!")
 
-        # Bloco de Exportar HTML (Seu código original adaptado)
         with col_export:
             st.subheader("📄 Exportar Contrato")
-            linhas_tabela = ""
-            for idx, item in enumerate(aprovadas, 1):
-                linhas_tabela += f"""<tr>
-                    <td style="text-align: center; font-weight: bold; padding: 8px; border: 1px solid #ddd;">{idx}</td>
-                    <td style="padding: 8px; border: 1px solid #ddd;">{item['texto']}</td>
-                    <td style="padding: 8px; border: 1px solid #ddd; font-weight: 500;">{item['responsavel']}</td>
-                </tr>"""
-
-            html_documento = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <style>
-                    body {{ font-family: Arial, sans-serif; padding: 20px; color: #333; }}
-                    .header {{ text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; margin-bottom: 20px; }}
-                    .header h1 {{ color: #1e3a8a; margin: 0; font-size: 20pt; }}
-                    .info {{ background: #f3f4f6; padding: 10px 15px; border-left: 4px solid #2563eb; margin-bottom: 20px; }}
-                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
-                    th {{ background: #1e3a8a; color: white; padding: 8px; text-align: left; }}
-                    .pacto {{ background: #eff6ff; padding: 12px; border: 1px solid #bfdbfe; font-style: italic; text-align: center; margin-bottom: 30px; }}
-                    .sig-container {{ display: flex; justify-content: space-between; margin-top: 50px; }}
-                    .sig-box {{ width: 40%; text-align: center; border-top: 1px solid #333; padding-top: 5px; font-weight: bold; }}
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>CONTRATO DIDÁTICO DE SALA DE AULA</h1>
-                    <p>Compromisso de Convivência e Aprendizado Coletivo</p>
-                </div>
-                <div class="info">
-                    <p style="margin: 3px 0;"><strong>Turma:</strong> {nome_turma_completo}</p>
-                    <p style="margin: 3px 0;"><strong>Professor(a):</strong> {nome_prof}</p>
-                </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="width: 8%; text-align: center;">#</th>
-                            <th style="width: 62%;">Regra / Combinado</th>
-                            <th style="width: 30%;">Responsável</th>
-                        </tr>
-                    </thead>
-                    <tbody>{linhas_tabela}</tbody>
-                </table>
-                <div class="pacto">
-                    "Declaramos que participamos ativamente da construção deste contrato didático. Toda a turma se compromete a respeitar os acordos firmados para garantir um ambiente produtivo, seguro e harmonioso para todos."
-                </div>
-                <div class="sig-container">
-                    <div class="sig-box">Representante da Turma</div>
-                    <div class="sig-box">Prof. {nome_prof}</div>
-                </div>
-            </body>
-            </html>
-            """
-            st.caption(
-                "Baixe para impressão ou gere um PDF pelo navegador (Ctrl+P).")
+            st.caption("Baixe para impressão (Ctrl+P no navegador).")
+            html_doc = gerar_html_contrato(
+                nome_turma_completo, nome_prof, aprovadas)
             st.download_button(
-                label=f"📥 Baixar Contrato HTML",
-                data=html_documento,
+                label="📥 Baixar Contrato HTML",
+                data=html_doc,
                 file_name=f"Contrato_{nome_turma_completo.replace(' ', '_')}.html",
                 mime="text/html",
                 use_container_width=True
             )
 
-# --- 3. Aba de Visualização dos Contratos Salvos ---
+# ==========================================
+# ABA 2: CONTRATOS SALVOS
+# ==========================================
 with tab_salvos:
     st.header("📂 Base de Contratos Salvos")
-    st.write("Abaixo estão os contratos salvos por todos os professores.")
+    st.write("Consulte ou baixe contratos criados por outros professores.")
 
-    # Adicionamos um botão para atualizar os dados manualmente, caso haja múltiplas pessoas usando
     if st.button("🔄 Atualizar Lista"):
         st.rerun()
 
-    # Puxa a coleção 'contratos' do Firestore
     contratos_ref = db.collection("contratos").stream()
     contratos_encontrados = False
 
@@ -244,11 +264,20 @@ with tab_salvos:
         prof = dados.get("professor", "Não informado")
         regras_salvas = dados.get("regras", [])
 
-        # Cria um 'expander' (acordeão) para cada turma, mantendo a tela limpa
         with st.expander(f"🏫 {turma} — Prof(a). {prof}"):
             for i, r in enumerate(regras_salvas, 1):
                 st.markdown(
                     f"**{i}.** {r.get('texto', '')} *(Responsável: {r.get('responsavel', '')})*")
 
+            st.divider()
+            html_salvo = gerar_html_contrato(turma, prof, regras_salvas)
+            st.download_button(
+                label=f"📥 Baixar HTML ({turma})",
+                data=html_salvo,
+                file_name=f"Contrato_{turma.replace(' ', '_')}.html",
+                mime="text/html",
+                key=f"dl_{doc.id}"
+            )
+
     if not contratos_encontrados:
-        st.info("Nenhum contrato foi salvo no sistema ainda.")
+        st.info("Nenhum contrato foi salvo no Firebase ainda.")
